@@ -1,0 +1,28 @@
+# API Keys and Secrets (CRITICAL)
+.env
+*.env
+auth.json
+
+# Dependencies
+node_modules/
+dist/
+build/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Agent "Memory" & Database (Don't sync local DBs)
+*.db
+*.sqlite
+storage/
+memories/
+
+# OS Specific
+.DS_Store
+Thumbs.db
+
+# Playwright/Browser binaries
+test-results/
+playwright-report/
