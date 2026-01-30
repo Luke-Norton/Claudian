@@ -27,4 +27,5 @@ Thumbs.db
 test-results/
 playwright-report/
 
-.local
+# Claude-specific local settings
+.claude/*.local.json
