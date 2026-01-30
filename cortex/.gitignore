@@ -26,3 +26,5 @@ Thumbs.db
 # Playwright/Browser binaries
 test-results/
 playwright-report/
+
+.local
