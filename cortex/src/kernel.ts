@@ -6,6 +6,7 @@
  * - Routes tool calls to skills via the permission gate
  * - Handles streaming responses for low-latency UX
  * - Supports prompt caching for cost optimization
+ * - Integrates with the hybrid memory system
  */
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -34,11 +35,14 @@ Guidelines:
 - For shell commands, explain what you're about to do before executing
 - If a task seems dangerous, warn the user and ask for confirmation
 - Keep responses concise but informative
+- Use store_memory to save important facts you learn about the user or project
+- Use query_memory when you need context from previous conversations
 
 Available capabilities:
 - Read files with line numbers
 - Search for files by pattern or content
-- Execute PowerShell commands (requires approval)`;
+- Execute PowerShell commands (requires approval)
+- Store and query long-term memories`;
 
 export class Kernel {
   private client: Anthropic;
@@ -49,25 +53,25 @@ export class Kernel {
   private conversationHistory: MessageParam[] = [];
   private events: KernelEvents;
   private isProcessing = false;
-  private autoExtractMemories: boolean;
+  private enableReflection: boolean;
 
   constructor(config: KernelConfig, events: KernelEvents = {}) {
     this.client = new Anthropic({ apiKey: config.apiKey });
     this.model = config.model || DEFAULT_MODEL;
     this.maxTokens = DEFAULT_MAX_TOKENS;
     this.events = events;
-    this.autoExtractMemories = config.autoExtractMemories ?? true;
+    this.enableReflection = config.autoExtractMemories ?? true;
 
     this.permissionGate = new PermissionGate({
       timeout: config.permissionTimeout || 30000,
       onRequest: events.onPermissionRequest,
     });
 
-    // Initialize memory manager
+    // Initialize memory manager with new SQLite-based config
     this.memoryManager = initMemoryManager({
       apiKey: config.apiKey,
       memoryDir: config.memoryDir,
-      autoExtract: this.autoExtractMemories,
+      enableEmbeddings: true,
     });
 
     if (config.workingDir) {
@@ -98,13 +102,7 @@ export class Kernel {
       });
 
       // Process the conversation (may involve multiple rounds of tool calls)
-      const response = await this.processConversation(userMessage);
-
-      // Post-conversation: extract memories (non-blocking)
-      if (this.autoExtractMemories) {
-        this.extractMemoriesAsync();
-      }
-
+      const response = await this.processConversation();
       return response;
     } finally {
       this.isProcessing = false;
@@ -112,32 +110,57 @@ export class Kernel {
   }
 
   /**
-   * Extract memories from the conversation asynchronously (non-blocking)
+   * End the current session and trigger reflection
+   * This runs reflectAndSummarize to extract and store key information
    */
-  private extractMemoriesAsync(): void {
-    // Clone history to avoid race conditions
-    const historySnapshot = [...this.conversationHistory];
+  async endSession(): Promise<void> {
+    if (!this.enableReflection || this.conversationHistory.length < 2) {
+      this.log("info", "Session ended (no reflection needed)");
+      this.startNewSession();
+      return;
+    }
 
-    // Run extraction in background (don't await)
-    this.memoryManager.extractFromConversation(historySnapshot).catch((error) => {
-      this.log("warn", `Memory extraction failed: ${(error as Error).message}`);
-    });
+    this.log("info", "Ending session and running reflection...");
+
+    try {
+      // Clone history for reflection
+      const historySnapshot = [...this.conversationHistory];
+
+      // Run reflection (this extracts facts and saves episode)
+      const result = await this.memoryManager.reflectAndSummarize(historySnapshot);
+
+      if (result) {
+        this.log("info", `Reflection complete: ${result.keyTakeaways.length} takeaways, ${result.extractedFacts.length} facts extracted`);
+      }
+    } catch (error) {
+      this.log("warn", `Reflection failed: ${(error as Error).message}`);
+    }
+
+    // Start fresh session
+    this.startNewSession();
+  }
+
+  /**
+   * Start a new session (clears history, generates new session ID)
+   */
+  private startNewSession(): void {
+    this.conversationHistory = [];
+    this.memoryManager.newSession();
+    this.log("info", "New session started");
   }
 
   /**
    * Process the conversation, handling tool calls in a loop
    */
-  private async processConversation(userMessage: string): Promise<string> {
+  private async processConversation(): Promise<string> {
     const tools = getSkillsAsTools();
     let finalResponse = "";
 
-    // Build augmented system prompt with relevant memories
+    // Build augmented system prompt with core context
+    // Note: Only core facts are auto-loaded, not the full knowledge base
     let augmentedPrompt = SYSTEM_PROMPT;
     try {
-      augmentedPrompt = await this.memoryManager.buildAugmentedPrompt(
-        SYSTEM_PROMPT,
-        userMessage
-      );
+      augmentedPrompt = await this.memoryManager.buildAugmentedPrompt(SYSTEM_PROMPT);
     } catch (error) {
       this.log("warn", `Failed to augment prompt with memories: ${(error as Error).message}`);
     }
@@ -274,6 +297,7 @@ export class Kernel {
 
   /**
    * Clear conversation history (start fresh)
+   * @deprecated Use endSession() instead for proper reflection
    */
   clearHistory(): void {
     this.conversationHistory = [];
@@ -285,6 +309,13 @@ export class Kernel {
    */
   getHistory(): MessageParam[] {
     return [...this.conversationHistory];
+  }
+
+  /**
+   * Get memory manager instance (for direct access if needed)
+   */
+  getMemoryManager(): MemoryManager {
+    return this.memoryManager;
   }
 
   /**
@@ -357,14 +388,16 @@ async function main(): Promise<void> {
       const trimmed = input.trim();
 
       if (trimmed.toLowerCase() === "exit") {
+        console.log("Ending session...");
+        await kernel.endSession();
         console.log("Goodbye!");
         rl.close();
         process.exit(0);
       }
 
       if (trimmed.toLowerCase() === "clear") {
-        kernel.clearHistory();
-        console.log("History cleared.");
+        await kernel.endSession();
+        console.log("Session ended and history cleared.");
         prompt();
         return;
       }

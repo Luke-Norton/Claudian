@@ -1,9 +1,14 @@
 /**
- * Store Memory Skill - Explicitly store information in long-term memory
+ * Store Memory Skill - Save facts to long-term memory
+ *
+ * Allows the agent to proactively save important information:
+ * - Core facts: Always loaded into system prompt (high importance)
+ * - Knowledge: Stored in SQLite, retrieved via query_memory
  */
 
 import { SkillDefinition, PermissionLevel } from '../../types.js';
-import { getMemoryManager, MemoryCategory } from '../../memory/index.js';
+import { getMemoryManager } from '../../memory/index.js';
+import { MemoryCategory } from '../../memory/schema.js';
 
 const VALID_CATEGORIES: MemoryCategory[] = [
   'preference',
@@ -12,47 +17,55 @@ const VALID_CATEGORIES: MemoryCategory[] = [
   'instruction',
   'personal',
   'technical',
+  'identity',
 ];
 
 export const storeMemorySkill: SkillDefinition = {
   name: 'store_memory',
   description:
-    'Store important information in long-term memory for future conversations. Use this to remember user preferences, project details, instructions, or other facts that should persist across sessions.',
+    'Store important information in long-term memory. Use this to remember user preferences, project details, instructions, or other facts. Core facts (is_core=true) are always available; regular facts require query_memory to retrieve.',
   permission: PermissionLevel.ALLOW,
   parameters: {
     type: 'object',
     properties: {
-      content: {
-        type: 'string',
-        description:
-          'The information to remember. Should be a clear, concise statement (e.g., "User prefers dark mode", "Project uses TypeScript with strict mode")',
-      },
       category: {
         type: 'string',
         description:
-          'Category of the memory: preference, fact, project, instruction, personal, or technical',
+          'Category of the memory: preference (user likes/dislikes), fact (general info), project (project details), instruction (behavior rules), personal (about user), technical (configs/specs), identity (agent identity)',
         enum: VALID_CATEGORIES,
+      },
+      content: {
+        type: 'string',
+        description:
+          'The information to remember. Should be a clear, concise statement (e.g., "User prefers dark mode", "Project uses TypeScript")',
       },
       importance: {
         type: 'number',
         description:
-          'How important this memory is (0-1). Higher values make it more likely to be recalled. Default: 0.8',
+          'How important this is (0-1). Higher = more important. Default: 0.5 for knowledge, 0.9 for core facts',
+      },
+      is_core: {
+        type: 'boolean',
+        description:
+          'If true, this becomes a "core fact" always loaded into context. Use for critical preferences, instructions, or identity info. Default: false',
       },
       tags: {
         type: 'string',
-        description: 'Comma-separated tags for organizing memories (e.g., "editor,workflow")',
+        description:
+          'Comma-separated tags for organizing (e.g., "editor,workflow"). Helps with search.',
       },
     },
-    required: ['content'],
+    required: ['category', 'content'],
   },
   execute: async (params: Record<string, unknown>) => {
+    const category = params.category as MemoryCategory;
     const content = params.content as string;
-    const category = params.category as MemoryCategory | undefined;
     const importance = params.importance as number | undefined;
+    const isCore = (params.is_core as boolean) ?? false;
     const tagsStr = params.tags as string | undefined;
 
     // Validate category
-    if (category && !VALID_CATEGORIES.includes(category)) {
+    if (!VALID_CATEGORIES.includes(category)) {
       return {
         success: false,
         error: `Invalid category. Must be one of: ${VALID_CATEGORIES.join(', ')}`,
@@ -74,28 +87,26 @@ export const storeMemorySkill: SkillDefinition = {
 
     try {
       const memoryManager = getMemoryManager();
-      const memory = await memoryManager.storeExplicit(content, {
+
+      const result = await memoryManager.storeKnowledge({
+        content,
         category,
-        importance,
+        importance: importance ?? (isCore ? 0.9 : 0.5),
         tags,
+        source: 'explicit',
+        isCoreFact: isCore,
       });
 
-      if (memory) {
-        return {
-          success: true,
-          output: `Memory stored successfully with ID: ${memory.id}\nContent: "${content}"\nCategory: ${category || 'general'}`,
-          metadata: {
-            memoryId: memory.id,
-            category: memory.metadata.category,
-          },
-        };
-      } else {
-        return {
-          success: true,
-          output:
-            'Similar memory already exists - updated access count instead of creating duplicate.',
-        };
-      }
+      const typeLabel = isCore ? 'Core fact' : 'Knowledge';
+      return {
+        success: true,
+        output: `${typeLabel} stored successfully.\nID: ${result.id}\nCategory: ${category}\nContent: "${content}"${isCore ? '\n(Will be included in all future conversations)' : '\n(Retrievable via query_memory)'}`,
+        metadata: {
+          memoryId: result.id,
+          category,
+          isCoreFact: isCore,
+        },
+      };
     } catch (error) {
       return {
         success: false,
