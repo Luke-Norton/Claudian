@@ -20,6 +20,7 @@ import {
   queryMemorySkill,
   forgetMemorySkill,
 } from "./memory/index.js";
+import { browseWebSkill } from "./web_browser.js";
 
 // Registry of all available skills
 const skillRegistry = new Map<string, SkillDefinition>();
@@ -44,6 +45,8 @@ const coreSkills: SkillDefinition[] = [
   storeMemorySkill,
   queryMemorySkill,
   forgetMemorySkill,
+  // Web browsing
+  browseWebSkill,
 ];
 
 for (const skill of coreSkills) {
@@ -100,4 +103,5 @@ export {
   storeMemorySkill,
   queryMemorySkill,
   forgetMemorySkill,
+  browseWebSkill,
 };

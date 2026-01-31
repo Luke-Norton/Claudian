@@ -27,9 +27,10 @@
     "@anthropic-ai/sdk": "^0.72.1",
     "@modelcontextprotocol/sdk": "^1.25.3",
     "@xenova/transformers": "^2.17.2",
-    "better-sqlite3": "^11.7.0",
+    "better-sqlite3": "^12.6.2",
     "dotenv": "^17.2.3",
-    "grammy": "^1.39.3"
+    "grammy": "^1.39.3",
+    "playwright": "^1.58.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
