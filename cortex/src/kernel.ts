@@ -23,6 +23,8 @@ import {
 
 const DEFAULT_MODEL = "claude-sonnet-4-20250514";
 const DEFAULT_MAX_TOKENS = 8192;
+const MAX_HISTORY_LENGTH = 30;
+const PRUNE_COUNT = 20;
 
 const SYSTEM_PROMPT = `You are Claudian, a local AI assistant running on the user's Windows machine.
 
@@ -95,6 +97,9 @@ export class Kernel {
     this.isProcessing = true;
 
     try {
+      // Prune history if it's getting too long
+      await this.pruneHistoryIfNeeded();
+
       // Add user message to history
       this.conversationHistory.push({
         role: "user",
@@ -147,6 +152,82 @@ export class Kernel {
     this.conversationHistory = [];
     this.memoryManager.newSession();
     this.log("info", "New session started");
+  }
+
+  /**
+   * Reset the current session without reflection
+   * Use this for quick session resets (e.g., /new command)
+   */
+  resetSession(): void {
+    this.conversationHistory = [];
+    this.memoryManager.newSession();
+    this.log("info", "Session reset (no reflection)");
+  }
+
+  /**
+   * Prune old messages to save tokens
+   * Summarizes oldest messages into a context summary
+   */
+  private async pruneHistoryIfNeeded(): Promise<void> {
+    if (this.conversationHistory.length <= MAX_HISTORY_LENGTH) {
+      return;
+    }
+
+    this.log("info", `History length (${this.conversationHistory.length}) exceeds ${MAX_HISTORY_LENGTH}, pruning...`);
+
+    // Extract the oldest messages to summarize
+    const messagesToPrune = this.conversationHistory.slice(0, PRUNE_COUNT);
+    const remainingMessages = this.conversationHistory.slice(PRUNE_COUNT);
+
+    // Build a text representation of messages to summarize
+    const conversationText = messagesToPrune
+      .map((msg) => {
+        const role = msg.role === "user" ? "User" : "Assistant";
+        const content = typeof msg.content === "string"
+          ? msg.content
+          : msg.content
+              .filter((block): block is { type: "text"; text: string } =>
+                "type" in block && block.type === "text" && "text" in block)
+              .map((block) => block.text)
+              .join("\n");
+        return `${role}: ${content}`;
+      })
+      .join("\n\n");
+
+    try {
+      // Use Claude to create a concise summary
+      const summaryResponse = await this.client.messages.create({
+        model: this.model,
+        max_tokens: 1024,
+        system: "You are a conversation summarizer. Create a concise summary of the key points, decisions, and context from this conversation. Focus on information that would be useful for continuing the conversation. Keep it under 500 words.",
+        messages: [
+          {
+            role: "user",
+            content: `Summarize this conversation:\n\n${conversationText}`,
+          },
+        ],
+      });
+
+      const summaryText = summaryResponse.content
+        .filter((block) => block.type === "text")
+        .map((block) => "text" in block ? block.text : "")
+        .join("\n");
+
+      // Create a context summary message
+      const contextSummary: MessageParam = {
+        role: "user",
+        content: `[CONTEXT SUMMARY - Previous conversation condensed to save tokens]\n\n${summaryText}\n\n[END CONTEXT SUMMARY]`,
+      };
+
+      // Replace history with summary + remaining messages
+      this.conversationHistory = [contextSummary, ...remainingMessages];
+
+      this.log("info", `Pruned ${PRUNE_COUNT} messages into context summary. New history length: ${this.conversationHistory.length}`);
+    } catch (error) {
+      this.log("warn", `Failed to summarize history for pruning: ${(error as Error).message}`);
+      // Fallback: just keep the recent messages without summary
+      this.conversationHistory = remainingMessages;
+    }
   }
 
   /**

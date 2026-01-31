@@ -93,3 +93,25 @@ export interface KernelEvents {
   onStreamChunk?: (chunk: string) => void;
   onError?: (error: Error) => void;
 }
+
+/**
+ * Special Agent Manifest - Defines a specialized sub-agent
+ */
+export interface AgentManifest {
+  name: string;
+  description: string;
+  system_prompt: string;
+  required_skills: string[];
+  max_iterations?: number;  // Max tool call rounds (default: 10)
+  output_format?: "text" | "json";  // Expected output format
+}
+
+export interface AgentDeploymentResult {
+  success: boolean;
+  agent_name: string;
+  mission: string;
+  result?: string;
+  error?: string;
+  iterations_used: number;
+  skills_invoked: string[];
+}

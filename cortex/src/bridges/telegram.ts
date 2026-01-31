@@ -88,6 +88,7 @@ export class TelegramBridge {
         "🤖 *Claudian Remote Control*\n\n" +
           "Send me any message and I'll process it through the AI agent on your PC.\n\n" +
           "*Commands:*\n" +
+          "/new - Quick session reset\n" +
           "/status - Show agent status\n" +
           "/session - Start new session\n" +
           "/clear - Clear conversation history\n" +
@@ -102,6 +103,7 @@ export class TelegramBridge {
     this.bot.command("help", async (ctx) => {
       await ctx.reply(
         "🤖 *Claudian Commands*\n\n" +
+          "/new - Quick session reset\n" +
           "/status - Show current working directory and session info\n" +
           "/session - Start a fresh conversation session\n" +
           "/clear - Clear current session history\n" +
@@ -111,6 +113,13 @@ export class TelegramBridge {
           "/cd <path> - Change working directory",
         { parse_mode: "Markdown" }
       );
+    });
+
+    // /new - Quick session reset (no reflection)
+    this.bot.command("new", async (ctx) => {
+      this.kernel.resetSession();
+      this.activeSession = await this.sessionStore.create("telegram-session");
+      await ctx.reply("New session started. How can I help, Luke?");
     });
 
     // /status - Show status
