@@ -29,3 +29,7 @@ playwright-report/
 
 # Claude-specific local settings
 .claude/*.local.json
+
+# Claudian-specific data and logs
+.claudian/
+.claudian*
