@@ -27,6 +27,7 @@ import {
   QueryMemoryInput,
   ReflectionResult,
 } from './schema.js';
+import { getBackupSystem, autoBackup } from './backup.js';
 
 const REFLECTION_MODEL = 'claude-3-haiku-20240307';
 const REFLECTION_MAX_TOKENS = 2048;
@@ -83,8 +84,15 @@ export class MemoryManager {
         await this.embeddingService.init();
       }
 
+      // Initialize backup system
+      const backupSystem = getBackupSystem(this.config.memoryDir);
+      backupSystem.init();
+      
+      // Check for auto-backup on startup
+      await autoBackup(this.config.memoryDir);
+
       this.initialized = true;
-      console.log('[Memory] Memory manager initialized');
+      console.log('[Memory] Memory manager initialized with backup system');
     } catch (error) {
       console.error('[Memory] Failed to initialize:', error);
       throw error;
@@ -201,6 +209,9 @@ export class MemoryManager {
 
     console.log(`[Memory] Stored knowledge: "${input.content.substring(0, 50)}..."`);
 
+    // Trigger auto-backup after significant write operations
+    autoBackup(this.config.memoryDir).catch(() => {}); // Don't let backup failures break storage
+
     return {
       id: result.lastInsertRowid as number,
       content: input.content,
@@ -218,40 +229,59 @@ export class MemoryManager {
   /**
    * Query knowledge (called by query_memory tool)
    * Results are returned to LLM only when explicitly requested
+   * TOKEN-OPTIMIZED: Smart filtering and adaptive limits for cost efficiency
    */
   async queryKnowledge(input: QueryMemoryInput): Promise<KnowledgeSearchResult[]> {
     await this.init();
 
-    const limit = input.limit || 10;
+    // Analyze query to determine search strategy
+    const queryAnalysis = this.analyzeQuery(input.query);
+    const dynamicLimit = this.calculateOptimalLimit(queryAnalysis, input.limit);
+    
     const results: KnowledgeSearchResult[] = [];
 
-    // Try FTS search first
-    const ftsResults = await this.searchFTS(input.query, input.category, limit);
-    results.push(...ftsResults);
+    // Try FTS search first with higher relevance threshold
+    const ftsResults = await this.searchFTS(input.query, input.category, dynamicLimit * 2);
+    
+    // Apply FTS quality filter (higher minimum score)
+    const qualityFtsResults = ftsResults.filter(result => {
+      const minScore = queryAnalysis.isSpecific ? 0.5 : 1.0; // BM25 scores
+      return Math.abs(result.score) >= minScore;
+    });
+    
+    results.push(...qualityFtsResults);
 
-    // If embeddings enabled and we have fewer results, try semantic search
-    if (this.config.enableEmbeddings && results.length < limit) {
+    // If embeddings enabled and we need more results, try semantic search
+    if (this.config.enableEmbeddings && results.length < dynamicLimit) {
       const semanticResults = await this.searchSemantic(
         input.query,
         input.category,
-        limit - results.length
+        dynamicLimit - results.length
       );
 
-      // Merge, avoiding duplicates
+      // Merge with higher semantic threshold, avoiding duplicates
       const existingIds = new Set(results.map(r => r.snippet.id));
       for (const result of semanticResults) {
-        if (!existingIds.has(result.snippet.id)) {
+        if (!existingIds.has(result.snippet.id) && result.score >= queryAnalysis.minSemanticScore) {
           results.push(result);
         }
       }
     }
 
-    // Sort by score and limit
-    results.sort((a, b) => b.score - a.score);
-    const finalResults = results.slice(0, limit);
+    // Smart deduplication - remove very similar content
+    const dedupedResults = this.smartDeduplication(results);
 
-    // Update access counts
+    // Sort by relevance score and apply final filtering
+    dedupedResults.sort((a, b) => this.calculateRelevanceScore(b, queryAnalysis) - this.calculateRelevanceScore(a, queryAnalysis));
+    
+    // Apply adaptive limiting based on content quality
+    const finalResults = this.applyAdaptiveLimiting(dedupedResults, dynamicLimit, queryAnalysis);
+
+    // Update access counts for returned results only
     await this.updateAccessCounts(finalResults.map(r => r.snippet.id));
+
+    // Log token efficiency metrics
+    console.log(`[Memory] Query "${input.query.substring(0, 30)}..." - ${results.length} raw → ${finalResults.length} filtered (${((finalResults.length / Math.max(results.length, 1)) * 100).toFixed(0)}% precision)`);
 
     return finalResults;
   }
@@ -327,7 +357,9 @@ export class MemoryManager {
         const embedding = Array.from(new Float32Array(row.embedding.buffer));
         const similarity = this.embeddingService.cosineSimilarity(queryEmbedding, embedding);
 
-        if (similarity > 0.3) {
+        // Dynamic threshold - higher for better token efficiency
+        const dynamicThreshold = this.calculateSemanticThreshold(query, rows.length);
+        if (similarity > dynamicThreshold) {
           scored.push({ row, similarity });
         }
       }
@@ -606,12 +638,18 @@ export class MemoryManager {
   }
 
   /**
-   * Get statistics
+   * Get statistics including backup information
    */
   async getStats(): Promise<{
     coreFacts: number;
     knowledgeSnippets: number;
     episodes: number;
+    backup: {
+      totalBackups: number;
+      oldestBackup: string | null;
+      newestBackup: string | null;
+      totalSizeKB: number;
+    };
   }> {
     await this.init();
 
@@ -623,11 +661,243 @@ export class MemoryManager {
     const episodeStmt = this.db.prepare('SELECT COUNT(*) as count FROM episodes');
     const episodeResult = episodeStmt.get() as { count: number };
 
+    const backupSystem = getBackupSystem(this.config.memoryDir);
+    const backupStats = backupSystem.getStats();
+
     return {
       coreFacts: coreCount,
       knowledgeSnippets: knowledgeResult.count,
       episodes: episodeResult.count,
+      backup: backupStats,
     };
+  }
+
+  /**
+   * Create a manual backup of the memory database
+   */
+  async createBackup(): Promise<string | null> {
+    await this.init();
+    const backupSystem = getBackupSystem(this.config.memoryDir);
+    const backup = await backupSystem.createBackup();
+    return backup?.filename || null;
+  }
+
+  /**
+   * List available backups
+   */
+  async listBackups(): Promise<Array<{
+    filename: string;
+    timestamp: string;
+    size: number;
+    sizeKB: string;
+  }>> {
+    await this.init();
+    const backupSystem = getBackupSystem(this.config.memoryDir);
+    const backups = backupSystem.listBackups();
+    
+    return backups.map(backup => ({
+      filename: backup.filename,
+      timestamp: backup.timestamp,
+      size: backup.size,
+      sizeKB: (backup.size / 1024).toFixed(1)
+    }));
+  }
+
+  /**
+   * Restore from a specific backup file
+   */
+  async restoreFromBackup(backupFilename: string): Promise<boolean> {
+    const backupSystem = getBackupSystem(this.config.memoryDir);
+    const success = await backupSystem.restoreFromBackup(backupFilename);
+    
+    if (success) {
+      // Reinitialize after restore
+      this.initialized = false;
+      await this.init();
+    }
+    
+    return success;
+  }
+
+  // ============================================================
+  // TOKEN OPTIMIZATION METHODS
+  // ============================================================
+
+  /**
+   * Analyze query to determine optimal search strategy
+   */
+  private analyzeQuery(query: string): {
+    isSpecific: boolean;
+    isFactual: boolean;
+    isPreference: boolean;
+    complexity: number;
+    minSemanticScore: number;
+  } {
+    const words = query.toLowerCase().split(/\s+/);
+    const length = words.length;
+    
+    // Detect specific queries (names, dates, technical terms)
+    const specificPatterns = /\b\d{4}\b|\b[A-Z][a-z]+\s[A-Z][a-z]+\b|api|config|system|setting/i;
+    const isSpecific = specificPatterns.test(query) || words.some(w => w.length > 8);
+    
+    // Detect factual vs preference queries
+    const factualKeywords = ['what', 'when', 'where', 'how', 'which', 'who'];
+    const preferenceKeywords = ['prefer', 'like', 'want', 'need', 'favorite', 'setting'];
+    
+    const isFactual = factualKeywords.some(kw => words.includes(kw));
+    const isPreference = preferenceKeywords.some(kw => words.includes(kw));
+    
+    // Calculate complexity score
+    const complexity = Math.min(length / 10, 1); // 0-1 scale
+    
+    // Determine minimum semantic score based on query type
+    let minSemanticScore = 0.4; // default
+    if (isSpecific) minSemanticScore = 0.5;
+    if (isPreference) minSemanticScore = 0.6; // Preferences need high relevance
+    if (length < 3) minSemanticScore = 0.7; // Short queries need high precision
+    
+    return {
+      isSpecific,
+      isFactual,
+      isPreference,
+      complexity,
+      minSemanticScore,
+    };
+  }
+
+  /**
+   * Calculate optimal result limit based on query analysis
+   */
+  private calculateOptimalLimit(analysis: ReturnType<typeof this.analyzeQuery>, requestedLimit?: number): number {
+    const baseLimit = requestedLimit || 10;
+    
+    // Reduce limit for simple/specific queries to save tokens
+    if (analysis.isSpecific && analysis.complexity < 0.3) {
+      return Math.max(3, Math.floor(baseLimit * 0.5));
+    }
+    
+    // Slightly increase for complex queries but cap to avoid token waste
+    if (analysis.complexity > 0.7) {
+      return Math.min(baseLimit * 1.2, 12);
+    }
+    
+    return baseLimit;
+  }
+
+  /**
+   * Calculate dynamic semantic similarity threshold
+   */
+  private calculateSemanticThreshold(query: string, totalResults: number): number {
+    const baseThreshold = 0.4;
+    
+    // Higher threshold when we have many results (be more selective)
+    if (totalResults > 20) return 0.6;
+    if (totalResults > 10) return 0.5;
+    
+    // Lower threshold for short queries that might have semantic gaps
+    if (query.split(/\s+/).length <= 2) return 0.45;
+    
+    return baseThreshold;
+  }
+
+  /**
+   * Smart deduplication to remove very similar content
+   */
+  private smartDeduplication(results: KnowledgeSearchResult[]): KnowledgeSearchResult[] {
+    if (results.length <= 3) return results; // Skip dedup for small result sets
+    
+    const unique: KnowledgeSearchResult[] = [];
+    const seenContent = new Set<string>();
+    
+    // Sort by score to keep best results when deduplicating
+    const sorted = [...results].sort((a, b) => b.score - a.score);
+    
+    for (const result of sorted) {
+      const content = result.snippet.content.toLowerCase();
+      const contentWords = new Set(content.split(/\s+/).filter(w => w.length > 3));
+      
+      // Check for substantial overlap with existing results
+      let isDuplicate = false;
+      for (const seenWords of seenContent) {
+        const overlap = this.calculateWordOverlap(contentWords, new Set(seenWords.split(/\s+/)));
+        if (overlap > 0.7) { // 70% word overlap = duplicate
+          isDuplicate = true;
+          break;
+        }
+      }
+      
+      if (!isDuplicate) {
+        unique.push(result);
+        seenContent.add(content);
+      }
+    }
+    
+    return unique;
+  }
+
+  /**
+   * Calculate word overlap between two sets
+   */
+  private calculateWordOverlap(set1: Set<string>, set2: Set<string>): number {
+    if (set1.size === 0 || set2.size === 0) return 0;
+    
+    const intersection = new Set([...set1].filter(w => set2.has(w)));
+    const union = new Set([...set1, ...set2]);
+    
+    return intersection.size / union.size;
+  }
+
+  /**
+   * Calculate composite relevance score for ranking
+   */
+  private calculateRelevanceScore(result: KnowledgeSearchResult, analysis: ReturnType<typeof this.analyzeQuery>): number {
+    let score = result.score;
+    
+    // Boost recent memories (recency bias)
+    const daysSinceUpdate = (Date.now() - new Date(result.snippet.updatedAt).getTime()) / (1000 * 60 * 60 * 24);
+    const recencyBoost = Math.max(0, 1 - daysSinceUpdate / 30); // Boost memories from last 30 days
+    score += recencyBoost * 0.1;
+    
+    // Boost frequently accessed memories
+    const accessBoost = Math.min(result.snippet.accessCount * 0.02, 0.2);
+    score += accessBoost;
+    
+    // Boost high importance memories
+    score += result.snippet.importance * 0.15;
+    
+    // Category-specific boosts
+    if (analysis.isPreference && result.snippet.category === 'preference') score += 0.3;
+    if (analysis.isFactual && ['fact', 'technical'].includes(result.snippet.category)) score += 0.2;
+    
+    return score;
+  }
+
+  /**
+   * Apply adaptive limiting based on content quality and relevance distribution
+   */
+  private applyAdaptiveLimiting(
+    results: KnowledgeSearchResult[], 
+    targetLimit: number, 
+    analysis: ReturnType<typeof this.analyzeQuery>
+  ): KnowledgeSearchResult[] {
+    if (results.length <= targetLimit) return results;
+    
+    // Calculate score distribution to find natural cutoffs
+    const scores = results.map(r => r.score);
+    const avgScore = scores.reduce((sum, s) => sum + s, 0) / scores.length;
+    const scoreStdDev = Math.sqrt(scores.reduce((sum, s) => sum + Math.pow(s - avgScore, 2), 0) / scores.length);
+    
+    // Find quality threshold (1 standard deviation above mean)
+    const qualityThreshold = avgScore + scoreStdDev * 0.5;
+    
+    // Keep high-quality results even if over limit, but cap at 1.5x target
+    const highQualityResults = results.filter(r => r.score >= qualityThreshold);
+    if (highQualityResults.length <= targetLimit * 1.5) {
+      return highQualityResults;
+    }
+    
+    // Fallback to simple limit
+    return results.slice(0, targetLimit);
   }
 
   // Legacy compatibility methods

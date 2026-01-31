@@ -16,7 +16,19 @@ import {
   AgentDeploymentResult,
   ToolCall,
 } from "../types.js";
-import { getSkill, getSkillsAsTools } from "./index.js";
+
+// Lazy imports to avoid circular dependency with index.ts
+let _getSkill: typeof import("./index.js").getSkill;
+let _getSkillsAsTools: typeof import("./index.js").getSkillsAsTools;
+
+async function getSkillRegistry() {
+  if (!_getSkill || !_getSkillsAsTools) {
+    const indexModule = await import("./index.js");
+    _getSkill = indexModule.getSkill;
+    _getSkillsAsTools = indexModule.getSkillsAsTools;
+  }
+  return { getSkill: _getSkill, getSkillsAsTools: _getSkillsAsTools };
+}
 
 const DEFAULT_MAX_ITERATIONS = 10;
 const DEFAULT_MODEL = "claude-sonnet-4-20250514";
@@ -97,7 +109,8 @@ async function listAvailableAgents(): Promise<string[]> {
 /**
  * Filter tools to only those allowed by the agent
  */
-function filterToolsForAgent(requiredSkills: string[]): Anthropic.Tool[] {
+async function filterToolsForAgent(requiredSkills: string[]): Promise<Anthropic.Tool[]> {
+  const { getSkillsAsTools } = await getSkillRegistry();
   const allTools = getSkillsAsTools();
   return allTools.filter((tool) => requiredSkills.includes(tool.name)) as Anthropic.Tool[];
 }
@@ -116,6 +129,7 @@ async function executeToolCall(call: ToolCall, allowedSkills: string[]): Promise
     };
   }
 
+  const { getSkill } = await getSkillRegistry();
   const skill = getSkill(call.name);
   if (!skill) {
     return {
@@ -165,7 +179,7 @@ async function runAgent(
 ): Promise<AgentDeploymentResult> {
   const client = new Anthropic({ apiKey });
   const maxIterations = manifest.max_iterations || DEFAULT_MAX_ITERATIONS;
-  const tools = filterToolsForAgent(manifest.required_skills);
+  const tools = await filterToolsForAgent(manifest.required_skills);
   const skillsInvoked: string[] = [];
 
   // Build the agent's system prompt
@@ -291,7 +305,7 @@ export const deploySpecialAgentSkill: SkillDefinition = {
     "Available agents: Property Scout (real estate), Code Reviewer (code analysis). " +
     "Use list_agents=true to see all available agents. " +
     "Use this when a task requires specialized, focused execution.",
-  permission: PermissionLevel.CONFIRM,
+  permission: PermissionLevel.ALLOW,
   parameters: {
     type: "object",
     properties: {
@@ -353,6 +367,7 @@ export const deploySpecialAgentSkill: SkillDefinition = {
     }
 
     // Verify required skills exist
+    const { getSkill } = await getSkillRegistry();
     for (const skillName of manifest.required_skills) {
       const skill = getSkill(skillName);
       if (!skill) {

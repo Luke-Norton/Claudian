@@ -35,6 +35,7 @@ export class TelegramBridge {
   private sessionStore: SessionStore;
   private config: TelegramBridgeConfig;
   private activeSession: SessionData | null = null;
+  private recentMessageIds: Map<number, number[]> = new Map();
 
   constructor(config: TelegramBridgeConfig) {
     this.config = config;
@@ -208,6 +209,7 @@ export class TelegramBridge {
     // Handle regular text messages
     this.bot.on("message:text", async (ctx) => {
       const text = ctx.message.text;
+      const chatId = ctx.chat.id;
 
       // Skip if it's a command
       if (text.startsWith("/")) return;
@@ -219,10 +221,11 @@ export class TelegramBridge {
         // Process through kernel
         const response = await this.kernel.chat(text);
 
-        // Split long responses
+        // Split long responses and track sent messages
         const chunks = this.splitMessage(response);
         for (const chunk of chunks) {
-          await ctx.reply(chunk, { parse_mode: "Markdown" });
+          const msg = await ctx.reply(chunk, { parse_mode: "Markdown" });
+          this.trackMessage(chatId, msg.message_id);
         }
 
         // Persist to session if active
@@ -232,7 +235,8 @@ export class TelegramBridge {
           await this.sessionStore.save(this.activeSession);
         }
       } catch (error) {
-        await ctx.reply(`❌ Error: ${(error as Error).message}`);
+        const msg = await ctx.reply(`❌ Error: ${(error as Error).message}`);
+        this.trackMessage(chatId, msg.message_id);
       }
     });
   }
@@ -328,25 +332,87 @@ export class TelegramBridge {
   }
 
   /**
+   * Clear recent bot messages from a chat (best effort)
+   * Telegram only allows deleting messages less than 48 hours old
+   */
+  private async clearRecentMessages(chatId: number): Promise<number> {
+    let deletedCount = 0;
+    const messageIds = this.recentMessageIds.get(chatId) || [];
+
+    for (const msgId of messageIds) {
+      try {
+        await this.bot.api.deleteMessage(chatId, msgId);
+        deletedCount++;
+      } catch {
+        // Message might be too old or already deleted
+      }
+    }
+
+    // Clear the tracked messages
+    this.recentMessageIds.set(chatId, []);
+    return deletedCount;
+  }
+
+  /**
+   * Track a message ID for potential later deletion
+   */
+  private trackMessage(chatId: number, messageId: number): void {
+    const messages = this.recentMessageIds.get(chatId) || [];
+    messages.push(messageId);
+    // Keep only last 100 message IDs per chat
+    if (messages.length > 100) {
+      messages.shift();
+    }
+    this.recentMessageIds.set(chatId, messages);
+  }
+
+  /**
    * Start the bot
    */
   async start(): Promise<void> {
     // Initialize session store
     await this.sessionStore.init();
 
-    // Load or create initial session
-    this.activeSession = await this.sessionStore.getLatest();
-    if (!this.activeSession) {
-      this.activeSession = await this.sessionStore.create("telegram-session");
-    }
+    // Always start with a fresh session on bot restart
+    this.kernel.resetSession();
+    this.activeSession = await this.sessionStore.create("telegram-session");
 
     console.log("[Telegram] Starting bot...");
     console.log(`[Telegram] Allowed users: ${this.config.allowedUsers.join(", ")}`);
 
+    // Drop any pending updates from when bot was offline
+    // This prevents old messages from being processed on restart
+    await this.bot.api.deleteWebhook({ drop_pending_updates: true });
+
     // Start the bot
     await this.bot.start({
-      onStart: (botInfo) => {
+      drop_pending_updates: true,
+      onStart: async (botInfo) => {
         console.log(`[Telegram] Bot started as @${botInfo.username}`);
+
+        // Send startup notification to all allowed users
+        for (const userId of this.config.allowedUsers) {
+          try {
+            // Clear recent messages (best effort)
+            const deleted = await this.clearRecentMessages(userId);
+            if (deleted > 0) {
+              console.log(`[Telegram] Cleared ${deleted} messages for user ${userId}`);
+            }
+
+            // Send fresh session message
+            const msg = await this.bot.api.sendMessage(
+              userId,
+              "🔄 *Session Reset*\n\n" +
+                "Bot restarted with a fresh session.\n" +
+                "Previous conversation context has been cleared.\n\n" +
+                "How can I help, Luke?",
+              { parse_mode: "Markdown" }
+            );
+            this.trackMessage(userId, msg.message_id);
+          } catch (error) {
+            console.error(`[Telegram] Failed to notify user ${userId}:`, (error as Error).message);
+          }
+        }
       },
     });
   }

@@ -9,6 +9,7 @@
 import { SkillDefinition, PermissionLevel } from '../../types.js';
 import { getMemoryManager } from '../../memory/index.js';
 import { MemoryCategory, KnowledgeSearchResult } from '../../memory/schema.js';
+import { getContentOptimizer } from '../../memory/content-optimizer.js';
 
 const VALID_CATEGORIES: MemoryCategory[] = [
   'preference',
@@ -78,29 +79,59 @@ export const queryMemorySkill: SkillDefinition = {
         };
       }
 
-      // Format results
+      // Optimize content for token efficiency
+      const optimizer = getContentOptimizer();
+      const totalTokenBudget = Math.min(1500, results.length * 200); // Dynamic budget
+      
+      const optimizedResults = optimizer.optimizeBatch(
+        results.map(r => r.snippet),
+        {
+          totalTokenBudget,
+          contextQuery: query,
+          summaryMode: results.length > 5 ? 'brief' : 'detailed'
+        }
+      );
+
+      // Format results with optimized content
       const lines = results.map((result: KnowledgeSearchResult, index: number) => {
         const { snippet, score, matchType } = result;
+        const optimized = optimizedResults[index];
         const scorePercent = (score * 100).toFixed(0);
         const tags = snippet.tags?.length
           ? ` [tags: ${snippet.tags.join(', ')}]`
           : '';
-        return `${index + 1}. [${snippet.category}] (${scorePercent}% ${matchType}) ${snippet.content}${tags}`;
+        
+        // Use optimized summary instead of full content
+        const content = optimized ? optimized.summary : snippet.content;
+        const compressionInfo = optimized && optimized.compressionRatio < 0.9 
+          ? ` (${Math.round(optimized.compressionRatio * 100)}% compressed)`
+          : '';
+        
+        return `${index + 1}. [${snippet.category}] (${scorePercent}% ${matchType}${compressionInfo}) ${content}${tags}`;
       });
 
-      const output = `Found ${results.length} relevant memories:\n\n${lines.join('\n')}`;
+      // Calculate total tokens saved
+      const originalTokens = optimizedResults.reduce((sum, opt) => sum + Math.ceil(opt.fullContent.length / 4), 0);
+      const optimizedTokens = optimizedResults.reduce((sum, opt) => sum + opt.tokenEstimate, 0);
+      const tokensSaved = originalTokens - optimizedTokens;
+
+      const output = `Found ${results.length} relevant memories (${tokensSaved} tokens saved):\n\n${lines.join('\n')}`;
 
       return {
         success: true,
         output,
         metadata: {
           count: results.length,
-          memories: results.map((r: KnowledgeSearchResult) => ({
+          tokensSaved,
+          compressionRatio: optimizedTokens / originalTokens,
+          memories: results.map((r: KnowledgeSearchResult, index: number) => ({
             id: r.snippet.id,
-            content: r.snippet.content,
+            content: optimizedResults[index]?.summary || r.snippet.content,
+            fullContent: r.snippet.content,
             category: r.snippet.category,
             score: r.score,
             matchType: r.matchType,
+            tokenEstimate: optimizedResults[index]?.tokenEstimate,
           })),
         },
       };
