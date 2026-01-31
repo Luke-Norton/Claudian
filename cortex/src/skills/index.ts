@@ -15,6 +15,11 @@ import {
   gitCommitSkill,
   gitAddSkill,
 } from "./git.js";
+import {
+  storeMemorySkill,
+  queryMemorySkill,
+  forgetMemorySkill,
+} from "./memory/index.js";
 
 // Registry of all available skills
 const skillRegistry = new Map<string, SkillDefinition>();
@@ -35,6 +40,10 @@ const coreSkills: SkillDefinition[] = [
   gitLogSkill,
   gitCommitSkill,
   gitAddSkill,
+  // Memory operations
+  storeMemorySkill,
+  queryMemorySkill,
+  forgetMemorySkill,
 ];
 
 for (const skill of coreSkills) {
@@ -88,4 +97,7 @@ export {
   gitLogSkill,
   gitCommitSkill,
   gitAddSkill,
+  storeMemorySkill,
+  queryMemorySkill,
+  forgetMemorySkill,
 };

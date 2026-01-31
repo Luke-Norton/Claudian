@@ -12,6 +12,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { MessageParam, ToolResultBlockParam } from "@anthropic-ai/sdk/resources/messages";
 import { getSkill, getSkillsAsTools, getAllSkills } from "./skills/index.js";
 import { PermissionGate } from "./permissions.js";
+import { initMemoryManager, MemoryManager } from "./memory/index.js";
 import {
   KernelConfig,
   KernelEvents,
@@ -44,19 +45,29 @@ export class Kernel {
   private model: string;
   private maxTokens: number;
   private permissionGate: PermissionGate;
+  private memoryManager: MemoryManager;
   private conversationHistory: MessageParam[] = [];
   private events: KernelEvents;
   private isProcessing = false;
+  private autoExtractMemories: boolean;
 
   constructor(config: KernelConfig, events: KernelEvents = {}) {
     this.client = new Anthropic({ apiKey: config.apiKey });
     this.model = config.model || DEFAULT_MODEL;
     this.maxTokens = DEFAULT_MAX_TOKENS;
     this.events = events;
+    this.autoExtractMemories = config.autoExtractMemories ?? true;
 
     this.permissionGate = new PermissionGate({
       timeout: config.permissionTimeout || 30000,
       onRequest: events.onPermissionRequest,
+    });
+
+    // Initialize memory manager
+    this.memoryManager = initMemoryManager({
+      apiKey: config.apiKey,
+      memoryDir: config.memoryDir,
+      autoExtract: this.autoExtractMemories,
     });
 
     if (config.workingDir) {
@@ -87,7 +98,13 @@ export class Kernel {
       });
 
       // Process the conversation (may involve multiple rounds of tool calls)
-      const response = await this.processConversation();
+      const response = await this.processConversation(userMessage);
+
+      // Post-conversation: extract memories (non-blocking)
+      if (this.autoExtractMemories) {
+        this.extractMemoriesAsync();
+      }
+
       return response;
     } finally {
       this.isProcessing = false;
@@ -95,11 +112,35 @@ export class Kernel {
   }
 
   /**
+   * Extract memories from the conversation asynchronously (non-blocking)
+   */
+  private extractMemoriesAsync(): void {
+    // Clone history to avoid race conditions
+    const historySnapshot = [...this.conversationHistory];
+
+    // Run extraction in background (don't await)
+    this.memoryManager.extractFromConversation(historySnapshot).catch((error) => {
+      this.log("warn", `Memory extraction failed: ${(error as Error).message}`);
+    });
+  }
+
+  /**
    * Process the conversation, handling tool calls in a loop
    */
-  private async processConversation(): Promise<string> {
+  private async processConversation(userMessage: string): Promise<string> {
     const tools = getSkillsAsTools();
     let finalResponse = "";
+
+    // Build augmented system prompt with relevant memories
+    let augmentedPrompt = SYSTEM_PROMPT;
+    try {
+      augmentedPrompt = await this.memoryManager.buildAugmentedPrompt(
+        SYSTEM_PROMPT,
+        userMessage
+      );
+    } catch (error) {
+      this.log("warn", `Failed to augment prompt with memories: ${(error as Error).message}`);
+    }
 
     while (true) {
       // Make API call with streaming
@@ -109,7 +150,7 @@ export class Kernel {
         system: [
           {
             type: "text",
-            text: SYSTEM_PROMPT,
+            text: augmentedPrompt,
             cache_control: { type: "ephemeral" },
           },
         ],

@@ -83,6 +83,8 @@ export interface KernelConfig {
   workingDir?: string;
   permissionTimeout?: number;
   logLevel?: "debug" | "info" | "warn" | "error";
+  autoExtractMemories?: boolean;  // default: true
+  memoryDir?: string;             // default: '.claudian/memories'
 }
 
 export interface KernelEvents {
