@@ -1,294 +1,363 @@
-# Claudian
+# 🧠 CORTEX
 
-**Local-first AI agent framework for Windows**
-
-Claudian is a modular, extensible AI agent framework designed for software engineers who want full control over their local AI assistant. It runs as an always-on daemon on your Windows machine, executing tasks through the Model Context Protocol (MCP) while keeping you in the loop for dangerous operations.
-
-## Features
-
-- **Local-First**: Your data never leaves your machine except for API calls
-- **Human-in-the-Loop**: Permission system with 4 levels (ALLOW, CONFIRM, REQUIRE, DENY)
-- **MCP Server**: Expose skills as MCP tools for external clients
-- **Remote Control**: Telegram bot bridge for controlling your PC remotely
-- **Session Persistence**: Conversations are saved to disk and can be resumed
-- **Extensible**: Add new skills by dropping files in `src/skills/`
-
-## Architecture
+<div align="center">
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         REMOTE BRIDGE LAYER                             │
-│                  (Telegram / WhatsApp Message Gateway)                  │
-└────────────────────────────────┬────────────────────────────────────────┘
-                                 │ Commands / Responses
-┌────────────────────────────────▼────────────────────────────────────────┐
-│                              KERNEL                                     │
-│  ┌────────────────┐  ┌─────────────────┐  ┌─────────────────────────┐  │
-│  │ Session        │  │ Permission      │  │ Session Store           │  │
-│  │ Manager        │  │ Gate (HITL)     │  │ (persistent)            │  │
-│  │                │  │                 │  │                         │  │
-│  │ • Conversation │  │ • ALLOW         │  │ • JSON file storage     │  │
-│  │ • Tool state   │  │ • CONFIRM       │  │ • Auto-resume           │  │
-│  │ • Streaming    │  │ • REQUIRE       │  │ • Session history       │  │
-│  └────────────────┘  │ • DENY          │  └─────────────────────────┘  │
-│                      └─────────────────┘                                │
-└────────────────────────────────┬────────────────────────────────────────┘
-                                 │ Tool Calls
-┌────────────────────────────────▼────────────────────────────────────────┐
-│                           SKILL LAYER                                   │
-│                    (MCP-Compatible Tool Definitions)                    │
-│                                                                         │
-│  File Operations    Search         Shell          Git                   │
-│  ┌────────────┐   ┌──────────┐  ┌──────────┐  ┌──────────────────────┐ │
-│  │ read_file  │   │ search   │  │ run_shell│  │ git_status/diff/log  │ │
-│  │ write_file │   │ (ALLOW)  │  │ (REQUIRE)│  │ git_add/commit       │ │
-│  │ edit_file  │   └──────────┘  └──────────┘  └──────────────────────┘ │
-│  └────────────┘                                                         │
-└────────────────────────────────┬────────────────────────────────────────┘
-                                 │ Streaming + Tool Use
-┌────────────────────────────────▼────────────────────────────────────────┐
-│                          CLAUDE API                                     │
-│   • Streaming responses • Prompt caching • Parallel tool execution      │
-└─────────────────────────────────────────────────────────────────────────┘
+   ██████╗ ██████╗ ██████╗ ████████╗███████╗██╗  ██╗
+  ██╔════╝██╔═══██╗██╔══██╗╚══██╔══╝██╔════╝╚██╗██╔╝
+  ██║     ██║   ██║██████╔╝   ██║   █████╗   ╚███╔╝
+  ██║     ██║   ██║██╔══██╗   ██║   ██╔══╝   ██╔██╗
+  ╚██████╗╚██████╔╝██║  ██║   ██║   ███████╗██╔╝ ██╗
+   ╚═════╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝  ╚═╝
 ```
 
-## Quick Start
+**The skeleton for your AI Iron Man suit.**
 
-### Prerequisites
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-20+-green?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Claude](https://img.shields.io/badge/Claude-Anthropic-orange?logo=anthropic&logoColor=white)](https://anthropic.com/)
+[![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
-- Node.js 20+
-- Windows 10/11
-- Claude API key
+<img src="https://media.giphy.com/media/l0HlNQ03J5JxX6lva/giphy.gif" width="300" alt="Iron Man Suit Up">
 
-### Installation
+*Your local-first AI agent framework. Clone it. Extend it. Make it yours.*
+
+[Quick Start](#-quick-start) • [Skills](#-skills) • [Browser Automation](#-browser-automation) • [Memory System](#-memory-system) • [Add Your Own](#-adding-custom-skills)
+
+</div>
+
+---
+
+## 🤔 What is this?
+
+Cortex is a **bare-bones AI agent framework** designed to be the foundation for your personal AI assistant. Think of it as the nervous system - we give you the brain (Claude), the hands (skills), and the memory (persistence). You add the personality.
+
+```
+You: "Hey, can you check my GitHub notifications, summarize them,
+      and draft responses to any urgent ones?"
+
+Cortex: *opens your actual Chrome browser*
+        *logs in with YOUR cookies*
+        *does the thing*
+        *comes back with results*
+```
+
+**It's not a product. It's a starting point.**
+
+---
+
+## ✨ What's in the Box
+
+<table>
+<tr>
+<td width="50%">
+
+### 🛠️ 15 Core Skills
+- **File Ops**: Read, write, edit, search
+- **Git**: Status, diff, log, add, commit
+- **Shell**: PowerShell with safety rails
+- **Memory**: Store, query, forget
+- **Web**: Full browser automation
+- **Agents**: Deploy specialized sub-agents
+
+</td>
+<td width="50%">
+
+### 🔒 Human-in-the-Loop
+```
+ALLOW   → Just do it
+CONFIRM → "Hey, I'm about to..." (auto-approves)
+REQUIRE → "Can I?" (waits for you)
+DENY    → Nope, never
+```
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+### 🧠 Memory That Persists
+- SQLite + semantic embeddings
+- Core facts auto-load every conversation
+- Query memories on demand
+- Session summaries for context
+
+</td>
+<td width="50%">
+
+### 🌐 Multiple Interfaces
+- **CLI**: Interactive terminal
+- **MCP**: Plug into Claude Desktop
+- **Telegram**: Control from your phone
+
+</td>
+</tr>
+</table>
+
+---
+
+## 🚀 Quick Start
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/claudian.git
-cd claudian/cortex
+# Clone it
+git clone https://github.com/yourusername/cortex.git
+cd cortex
 
-# Install dependencies
+# Install
 npm install
 
-# Configure environment
+# Configure (add your ANTHROPIC_API_KEY)
 cp .env.example .env
-# Edit .env and add your ANTHROPIC_API_KEY
 
-# Build
+# Build & Run
 npm run build
+npm start
 ```
 
-### Running
+<details>
+<summary>📱 Want Telegram control?</summary>
 
 ```bash
-# Interactive CLI mode
-npm start
+# Add to .env:
+TELEGRAM_BOT_TOKEN=your_bot_token
+TELEGRAM_ALLOWED_USERS=your_user_id
 
-# As MCP server (for external clients)
-npm run start:mcp
-
-# With Telegram remote control
+# Run
 npm run start:telegram
 ```
 
-## Project Structure
+</details>
 
-```
-cortex/
-├── src/
-│   ├── kernel.ts           # Main daemon entry point
-│   ├── session.ts          # Persistent session storage
-│   ├── permissions.ts      # HITL permission gate
-│   ├── mcp-server.ts       # MCP server for external clients
-│   ├── types.ts            # Core type definitions
-│   ├── skills/
-│   │   ├── index.ts        # Skill registry
-│   │   ├── read_file.ts    # Read files (ALLOW)
-│   │   ├── write_file.ts   # Write files (CONFIRM)
-│   │   ├── edit_file.ts    # Edit files (CONFIRM)
-│   │   ├── search.ts       # Search files/content (ALLOW)
-│   │   ├── run_shell.ts    # PowerShell execution (REQUIRE)
-│   │   └── git.ts          # Git operations (mixed)
-│   └── bridges/
-│       └── telegram.ts     # Telegram bot bridge
-├── dist/                   # Compiled JS
-├── .claudian/
-│   └── sessions/           # Persisted conversation sessions
-├── package.json
-├── tsconfig.json
-├── .env.example
-└── README.md
-```
+---
 
-## Skills Reference
+## 🎯 Skills
 
-### File Operations
+| Skill | Permission | What it does |
+|-------|:----------:|--------------|
+| `read_file` | 🟢 | Read any file |
+| `write_file` | 🟡 | Create/overwrite files |
+| `edit_file` | 🟡 | Find & replace in files |
+| `search` | 🟢 | Glob patterns + regex content search |
+| `run_shell` | 🔴 | PowerShell (dangerous patterns blocked) |
+| `git_status` | 🟢 | Working tree status |
+| `git_diff` | 🟢 | See changes |
+| `git_log` | 🟢 | Commit history |
+| `git_add` | 🟡 | Stage files |
+| `git_commit` | 🔴 | Create commits |
+| `store_memory` | 🟢 | Save facts for later |
+| `query_memory` | 🟢 | Semantic search your memories |
+| `forget_memory` | 🟢 | Delete memories |
+| `browse_web` | 🟡 | Full browser automation |
+| `deploy_special_agent` | 🟢 | Spawn focused sub-agents |
 
-| Skill | Permission | Description |
-|-------|------------|-------------|
-| `read_file` | ALLOW | Read file contents with optional line range |
-| `write_file` | CONFIRM | Write or create files (creates parent dirs) |
-| `edit_file` | CONFIRM | Make targeted string replacements |
+🟢 ALLOW &nbsp;&nbsp; 🟡 CONFIRM &nbsp;&nbsp; 🔴 REQUIRE
 
-### Search
+---
 
-| Skill | Permission | Description |
-|-------|------------|-------------|
-| `search` | ALLOW | Find files by glob or search content by regex |
+## 🌐 Browser Automation
 
-### Shell
+This isn't your grandma's web scraper. **Full Playwright-powered browser control.**
 
-| Skill | Permission | Description |
-|-------|------------|-------------|
-| `run_shell` | REQUIRE | Execute PowerShell commands (safety filtered) |
+### Modes
 
-### Git Operations
+| Mode | What happens |
+|------|--------------|
+| `headless` | Fast, invisible (default) |
+| `visible` | Watch it work |
+| `chrome` | Launch Chrome (temp profile) |
+| `connect` | **Control YOUR Chrome with all your logins** 🔥 |
 
-| Skill | Permission | Description |
-|-------|------------|-------------|
-| `git_status` | ALLOW | Show working tree status |
-| `git_diff` | ALLOW | Show changes (staged or unstaged) |
-| `git_log` | ALLOW | Show commit history |
-| `git_add` | CONFIRM | Stage files for commit |
-| `git_commit` | REQUIRE | Create a commit |
+### The Magic: Connect Mode
 
-## Permission Levels
+```powershell
+# Step 1: Launch Chrome with debugging
+& "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222
 
-| Level | Behavior | Use Case |
-|-------|----------|----------|
-| `ALLOW` | Auto-approve, execute immediately | Read-only operations |
-| `CONFIRM` | Notify user, auto-approve after timeout | File modifications |
-| `REQUIRE` | Block until explicit user approval | Shell commands, commits |
-| `DENY` | Never execute | Dangerous operations |
-
-## MCP Server Mode
-
-Run Claudian as an MCP server to allow external clients (like Claude Desktop) to use its tools:
-
-```bash
-npm run start:mcp
+# Step 2: Agent connects to YOUR browser
+# Now it has all your cookies, logins, everything
 ```
 
-Configure in Claude Desktop's `claude_desktop_config.json`:
+### Actions Available
+
+```
+navigate, click, double_click, type, fill, clear, press,
+scroll, scroll_to, hover, select, check, uncheck,
+screenshot, wait, extract, get_text, get_attribute,
+get_url, get_title, go_back, go_forward, reload,
+new_tab, switch_tab, close_tab, list_tabs,
+evaluate (run JS), handle_dialog
+```
+
+### Example: Check Gmail
 
 ```json
 {
-  "mcpServers": {
-    "claudian": {
-      "command": "node",
-      "args": ["C:/path/to/claudian/cortex/dist/mcp-server.js"],
-      "env": {
-        "ANTHROPIC_API_KEY": "sk-ant-..."
-      }
-    }
-  }
+  "mode": "connect",
+  "actions": [
+    { "action": "navigate", "url": "https://mail.google.com" },
+    { "action": "wait", "selector": "div[role='main']" },
+    { "action": "extract" }
+  ]
 }
 ```
 
-## Telegram Bridge
+If you're logged in, it just works. No auth setup needed.
 
-Control your PC remotely via Telegram:
+---
 
-1. Create a bot with [@BotFather](https://t.me/BotFather)
-2. Get your user ID from [@userinfobot](https://t.me/userinfobot)
-3. Configure `.env`:
-   ```bash
-   TELEGRAM_BOT_TOKEN=your_bot_token
-   TELEGRAM_ALLOWED_USERS=your_user_id
-   ```
-4. Start the bridge:
-   ```bash
-   npm run start:telegram
-   ```
+## 🧠 Memory System
 
-### Telegram Commands
+```
+┌─────────────────────────────────────────────────────────┐
+│                    YOUR BRAIN                           │
+├─────────────────────────────────────────────────────────┤
+│  CORE FACTS          │  KNOWLEDGE         │  EPISODES  │
+│  (auto-loaded)       │  (query on demand) │  (history) │
+│                      │                    │            │
+│  "User prefers       │  "React component  │  Session   │
+│   dark mode"         │   patterns..."     │  summaries │
+│                      │                    │            │
+│  "Working on         │  "API endpoint     │  What we   │
+│   Project X"         │   documentation"   │  talked    │
+│                      │                    │  about     │
+└──────────────────────┴────────────────────┴────────────┘
+```
 
-| Command | Description |
-|---------|-------------|
-| `/start` | Initialize and show help |
-| `/status` | Show agent status and session info |
-| `/session` | Start a new conversation session |
-| `/clear` | Clear conversation history |
-| `/approve` | Approve a pending dangerous action |
-| `/deny` | Deny a pending dangerous action |
-| `/pwd` | Show current working directory |
-| `/cd <path>` | Change working directory |
+**Core facts** load automatically every conversation. Everything else is pulled on-demand via `query_memory` to save tokens.
 
-## Session Persistence
+---
 
-Conversations are automatically saved to `.claudian/sessions/` as JSON files. Sessions include:
+## 🤖 Special Agents
 
-- Full message history
-- Metadata (created/updated timestamps, working directory)
-- Can be exported/imported for backup
+Deploy focused sub-agents for specific tasks:
 
-## Adding Custom Skills
+```json
+{
+  "agent": "code_reviewer",
+  "mission": "Review the auth module for security issues"
+}
+```
 
-Create a new file in `src/skills/`:
+Built-in agents:
+- **Auditor**: Project health checks
+- **Code Reviewer**: Security, bugs, performance analysis
+
+Add your own in `src/special_agents/` as JSON manifests.
+
+---
+
+## 🔧 Adding Custom Skills
+
+Drop a file in `src/skills/`:
 
 ```typescript
 import { SkillDefinition, PermissionLevel, SkillResult } from "../types.js";
 
-export const myCustomSkill: SkillDefinition = {
+export const mySkill: SkillDefinition = {
   name: "my_skill",
-  description: "What this skill does",
+  description: "Does something cool",
   permission: PermissionLevel.CONFIRM,
   parameters: {
     type: "object",
     properties: {
-      input: {
-        type: "string",
-        description: "The input parameter",
-      },
+      input: { type: "string", description: "The thing" },
     },
     required: ["input"],
   },
-  async execute(params: Record<string, unknown>): Promise<SkillResult> {
-    const input = params.input as string;
-    // Your implementation here
-    return {
-      success: true,
-      output: `Processed: ${input}`,
-    };
+  async execute(params): Promise<SkillResult> {
+    // Your code here
+    return { success: true, output: "Done!" };
   },
 };
 ```
 
-Then register it in `src/skills/index.ts`:
+Register in `src/skills/index.ts`. That's it.
 
-```typescript
-import { myCustomSkill } from "./my_skill.js";
-// Add to coreSkills array
+---
+
+## 📁 Project Structure
+
+```
+cortex/
+├── src/
+│   ├── kernel.ts              # The brain
+│   ├── permissions.ts         # Human-in-the-loop gate
+│   ├── session.ts             # Conversation persistence
+│   ├── mcp-server.ts          # MCP protocol support
+│   ├── skills/
+│   │   ├── index.ts           # Skill registry
+│   │   ├── read_file.ts       # File reading
+│   │   ├── write_file.ts      # File writing
+│   │   ├── edit_file.ts       # File editing
+│   │   ├── search.ts          # File/content search
+│   │   ├── run_shell.ts       # Shell execution
+│   │   ├── git.ts             # Git operations
+│   │   ├── web_browser.ts     # Browser automation
+│   │   ├── deploy_agent.ts    # Sub-agent deployment
+│   │   └── memory/            # Memory skills
+│   ├── memory/
+│   │   ├── manager.ts         # Memory orchestration
+│   │   ├── db.ts              # SQLite backend
+│   │   └── embedding-service.ts
+│   ├── special_agents/        # Agent manifests (JSON)
+│   └── bridges/
+│       └── telegram.ts        # Telegram bot
+├── .claudian/
+│   ├── sessions/              # Saved conversations
+│   └── memories.db            # SQLite memory store
+└── package.json
 ```
 
-## Environment Variables
+---
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | Yes | - | Your Claude API key |
-| `CLAUDIAN_PERMISSION_TIMEOUT` | No | 30000 | Timeout for CONFIRM level (ms) |
-| `CLAUDIAN_WORKING_DIR` | No | cwd | Working directory |
-| `TELEGRAM_BOT_TOKEN` | For Telegram | - | Telegram bot token |
-| `TELEGRAM_ALLOWED_USERS` | For Telegram | - | Allowed user IDs (comma-separated) |
+## ⚙️ Environment Variables
 
-## Security Considerations
+| Variable | Required | Description |
+|----------|:--------:|-------------|
+| `ANTHROPIC_API_KEY` | ✅ | Your Claude API key |
+| `CLAUDIAN_PERMISSION_TIMEOUT` | | Auto-approve timeout (ms, default: 30000) |
+| `CLAUDIAN_WORKING_DIR` | | Default working directory |
+| `TELEGRAM_BOT_TOKEN` | For Telegram | Bot token from @BotFather |
+| `TELEGRAM_ALLOWED_USERS` | For Telegram | Your Telegram user ID |
 
-- **Shell Command Filtering**: Dangerous patterns (format drive, recursive delete) are blocked
-- **User Whitelist**: Telegram bridge only responds to configured user IDs
-- **Permission Gate**: All tool calls pass through the permission system
-- **Local Storage**: Sessions are stored locally, not uploaded anywhere
+---
 
-## Roadmap
+## 🗺️ What's NOT Included (Yet)
 
-- [x] V0.1: Core kernel + foundational skills
-- [x] V0.2: Session persistence
-- [x] V0.3: MCP server integration
-- [x] V0.4: Telegram bridge
-- [ ] V0.5: WhatsApp bridge
-- [ ] V0.6: Browser automation skills
-- [ ] V0.7: Multi-agent orchestration
-- [ ] V0.8: Plugin marketplace
+This is a **skeleton**. Intentionally minimal. Some things you might want to add:
 
-## License
+- 📅 Calendar integration
+- 📧 Email access
+- 🔔 Notifications/reminders
+- ⏰ Scheduled tasks
+- 🎤 Voice interface
+- 🏠 Smart home control
 
-MIT
+The architecture supports all of this. We just didn't build it for you.
+
+---
+
+## 🤝 Philosophy
+
+1. **Local-first**: Your data stays on your machine
+2. **Extensible**: Skills are just TypeScript files
+3. **Safe by default**: Human approval for dangerous ops
+4. **Minimal**: We give you the foundation, not the whole house
+
+---
+
+## 📜 License
+
+MIT - Do whatever you want with it.
+
+---
+
+<div align="center">
+
+**Built for developers who want AI that actually does things.**
+
+<img src="https://media.giphy.com/media/3oKIPnAiaMCws8nOsE/giphy.gif" width="200" alt="Coding">
+
+*Now go build something cool.*
+
+</div>
