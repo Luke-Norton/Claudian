@@ -131,7 +131,6 @@ import {
 } from "./memory/index.js";
 import { browseWebSkill } from "./web_browser.js";
 import { deploySpecialAgentSkill } from "./deploy_agent.js";
-import { googleDriveSkill } from "./google_drive.js";
 
 // Pre-register static skills immediately
 const staticSkills: SkillDefinition[] = [
@@ -149,10 +148,7 @@ const staticSkills: SkillDefinition[] = [
   queryMemorySkill,
   forgetMemorySkill,
   browseWebSkill,
-  // Special agent orchestration
   deploySpecialAgentSkill,
-  // Google Drive integration
-  googleDriveSkill,
 ];
 
 for (const skill of staticSkills) {
@@ -219,5 +215,4 @@ export {
   forgetMemorySkill,
   browseWebSkill,
   deploySpecialAgentSkill,
-  googleDriveSkill,
 };
